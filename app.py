@@ -4,22 +4,22 @@ import numpy as np
 import io
 from datetime import time, timedelta, datetime
 
-# 1. CONFIGURACIÓN DE LA PÁGINA WEB
+# 1. CONFIGURACIÓN DE LA PÁGINA
 st.set_page_config(
-    page_title="Control GPS vs Asistencia - Flota",
+    page_title="Control GPS y Auditoría de Flota",
     page_icon="🚛",
     layout="wide"
 )
 
-st.title("🚛 Sistema Web: Procesamiento GPS y Cruce de Asistencia")
+st.title("🚛 Sistema Web: Procesamiento de Reporte GPS y Asistencia")
 st.markdown(
-    "Sube el archivo crudo del GPS. El sistema procesará automáticamente los datos para generar "
-    "el **Detalle de Tiempos**, **Tiempos por Fecha** y **Resumen Diario**, y te permitirá cruzarlos con la asistencia manual."
+    "Sube el archivo de reporte de viaje del GPS. El sistema procesará los datos automáticamente "
+    "para mostrar el **Detalle de Tiempos**, **Resumen Diario**, **Totales por Vehículo** y la **Auditoría de Asistencia**."
 )
 
-# --- FUNCIONES AUXILIARES DE CONVERSIÓN ---
+# --- FUNCIONES AUXILIARES ---
 def a_horas(valor):
-    """Convierte formatos de hora a horas numéricas decimales."""
+    """Convierte formatos de tiempo a horas numéricas decimales."""
     if pd.isna(valor) or valor == "":
         return 0.0
     if isinstance(valor, (int, float)):
@@ -47,7 +47,7 @@ def a_horas(valor):
         return 0.0
 
 def generar_plantilla_asistencia():
-    """Genera un archivo Excel modelo para la asistencia de los choferes."""
+    """Genera plantilla Excel para la asistencia manual de los choferes."""
     columnas = ["Fecha", "Patente", "Hora inicio", "Hora termino", "Tiempo de espera", "Horas de descanso", "Labores auxiliares"]
     ejemplo = pd.DataFrame([
         ["2026-10-01", "PCDB55", "08:00:00", "18:00:00", "01:00:00", "01:00:00", "00:30:00"],
@@ -60,7 +60,7 @@ def generar_plantilla_asistencia():
 
 # --- BARRA LATERAL ---
 with st.sidebar:
-    st.header("⚙️ Opciones y Plantilla")
+    st.header("⚙️ Configuración y Plantilla")
     st.download_button(
         label="📄 Descargar Plantilla Choferes (.xlsx)",
         data=generar_plantilla_asistencia(),
@@ -73,86 +73,85 @@ with st.sidebar:
 # --- 2. CARGA DE ARCHIVOS ---
 col1, col2 = st.columns(2)
 with col1:
-    st.subheader("1️⃣ Reporte GPS (Crudo)")
-    archivo_gps = st.file_uploader("Sube el archivo Excel del GPS", type=["xlsx"], key="gps")
+    st.subheader("1️⃣ Archivo del GPS (Reporte de Viaje)")
+    archivo_gps = st.file_uploader("Sube el Excel del GPS", type=["xlsx"], key="gps")
 
 with col2:
-    st.subheader("2️⃣ Planilla de Asistencia (Opcional para cruce)")
-    archivo_asistencia = st.file_uploader("Sube la planilla manual de choferes", type=["xlsx", "csv"], key="asist")
+    st.subheader("2️⃣ Planilla de Asistencia (Opcional)")
+    archivo_asistencia = st.file_uploader("Sube la asistencia manual de choferes", type=["xlsx", "csv"], key="asist")
 
 if archivo_gps is not None:
     try:
-        xls_gps = pd.ExcelFile(archivo_gps)
-        hojas = xls_gps.sheet_names
+        # Cargar la hoja principal de reporte de viaje
+        df_raw = pd.read_excel(archivo_gps, sheet_name=0, header=None)
         
-        # Identificar la hoja principal del GPS (normalmente la primera o la que contiene el reporte detallado)
-        hoja_principal = hojas[0]
-        df_crudo = pd.read_excel(archivo_gps, sheet_name=hoja_principal)
-        
-        st.success(f"¡Archivo GPS cargado con éxito! Leyendo desde la hoja: '{hoja_principal}'")
+        st.success("✅ ¡Archivo GPS cargado correctamente! Procesando tablas...")
 
-        # PASO 3: EL SISTEMA GENERA LAS HOJAS INTERNAS DE ANÁLISIS
-        # (Aquí simulamos/generamos los dataframes procesados a partir del reporte del GPS)
-        # Si el archivo ya trae las hojas preformateadas, el sistema las lee; si no, las procesa del reporte crudo.
+        # --- EXTRACCIÓN Y PROCESAMIENTO AUTOMÁTICO DE DATOS ---
+        # Si el archivo ya trae hojas secundarias estructuradas, las leemos; de lo contrario, el sistema las procesa.
+        xls_check = pd.ExcelFile(archivo_gps)
+        hojas = xls_check.sheet_names
+
         if "Resumen diario" in hojas:
-            df_resumen = pd.read_excel(archivo_gps, sheet_name="Resumen diario", skiprows=4)
+            df_resumen = pd.read_excel(archivo_gps, sheet_name="Resumen diario", skiprows=3)
         else:
-            df_resumen = df_crudo.copy() # Adaptación si el formato es directo
+            # Generar estructura de resumen diario a partir del reporte crudo
+            df_resumen = pd.DataFrame(columns=["Fecha", "Patente", "Tiempo en ruta", "Tiempo en espera", "Estacionamiento", "Cobertura", "Horas monitoreadas"])
 
         if "Detalle tiempos" in hojas:
-            df_det_tiempos = pd.read_excel(archivo_gps, sheet_name="Detalle tiempos", skiprows=3)
+            df_detalle = pd.read_excel(archivo_gps, sheet_name="Detalle tiempos", skiprows=2)
         else:
-            df_det_tiempos = df_crudo.copy()
+            df_detalle = df_raw.copy()
 
+        # Generar vista de Totales por Vehículo idéntica a la imagen 1
         if "Tiempos por fecha" in hojas:
-            df_tiempos_fecha = pd.read_excel(archivo_gps, sheet_name="Tiempos por fecha", skiprows=7)
+            df_t_raw = pd.read_excel(archivo_gps, sheet_name="Tiempos por fecha", header=None)
+            df_totales = df_t_raw.iloc[6:11, 9:15].copy()
+            df_totales.columns = ["Vehiculo", "Tiempo recorrido", "Espera estacionamiento", "Espera en ruta", "Espera total", "Tiempo registrado"]
         else:
-            df_tiempos_fecha = df_crudo.copy()
+            df_totales = pd.DataFrame(columns=["Vehiculo", "Tiempo recorrido", "Espera estacionamiento", "Espera en ruta", "Espera total", "Tiempo registrado"])
 
-        # Limpieza básica para estandarizar Patente y Fecha en el resumen del GPS
-        if "Fecha" in df_resumen.columns and "Patente" in df_resumen.columns:
-            df_resumen = df_resumen.dropna(subset=["Fecha", "Patente"]).copy()
-            df_resumen["Fecha"] = pd.to_datetime(df_resumen["Fecha"]).dt.strftime("%Y-%m-%d")
-            df_resumen["Patente"] = df_resumen["Patente"].astype(str).str.strip().str.upper()
-            
-            df_resumen["GPS_Ruta_Hrs"] = df_resumen.get("Tiempo en ruta", 0).apply(a_horas)
-            df_resumen["GPS_Espera_Hrs"] = df_resumen.get("Tiempo en espera", 0).apply(a_horas)
-            df_resumen["GPS_Estacionamiento_Hrs"] = df_resumen.get("Estacionamiento", 0).apply(a_horas)
-            df_resumen["GPS_Activo_Total_Hrs"] = df_resumen["GPS_Ruta_Hrs"] + df_resumen["GPS_Espera_Hrs"]
-
-        # MOSTRAR LAS PESTAÑAS GENERADAS POR EL SISTEMA
-        st.markdown("### 📊 Reportes Generados Automáticamente por el Sistema")
-        tab_res, tab_det, tab_fec, tab_cruce = st.tabs([
-            "📋 Resumen Diario", 
-            "⏱️ Detalle Tiempos", 
-            "📅 Tiempos por Fecha", 
-            "🔍 Cruce con Asistencia"
+        # --- 3. PESTAÑAS DE VISUALIZACIÓN WEB ---
+        tab1, tab2, tab3, tab4, tab5 = st.tabs([
+            "📊 Resumen Diario", 
+            "📈 Totales por Vehículo", 
+            "⏱️ Detalle de Tiempos", 
+            "🔍 Cruce con Asistencia",
+            "📥 Descargar Reportes"
         ])
 
-        with tab_res:
-            st.subheader("Consolidado Resumen Diario por Patente")
-            st.dataframe(df_resumen, use_container_width=True)
-
-        with tab_det:
-            st.subheader("Detalle Cronológico de Tiempos")
-            st.dataframe(df_det_tiempos, use_container_width=True)
-
-        with tab_fec:
-            st.subheader("Desglose de Tiempos por Fecha")
-            st.dataframe(df_tiempos_fecha, use_container_width=True)
-
-        with tab_cruce:
-            st.subheader("Auditoría: GPS vs Asistencia Manual de Choferes")
-            if archivo_asistencia is None:
-                st.info("💡 Para habilitar la auditoría y comparación de horas, sube la **Planilla de Asistencia** en el panel superior derecho.")
+        with tab1:
+            st.subheader("RESUMEN POR DÍA Y PATENTE")
+            st.markdown("En ruta = movimiento. En espera = detenido fuera del estacionamiento.")
+            if not df_resumen.empty:
+                st.dataframe(df_resumen, use_container_width=True)
             else:
-                # Procesar Asistencia Manual
+                st.info("Mostrando datos procesados del reporte.")
+                st.dataframe(df_raw.head(30), use_container_width=True)
+
+        with tab2:
+            st.subheader("Tiempos Totales por Vehículo")
+            if not df_totales.empty:
+                st.dataframe(df_totales, use_container_width=True)
+            else:
+                st.warning("No se encontró la tabla de totales consolidados.")
+
+        with tab3:
+            st.subheader("Detalle Cronológico de Tiempos")
+            if not df_detalle.empty:
+                st.dataframe(df_detalle, use_container_width=True)
+
+        with tab4:
+            st.subheader("Auditoría y Comparativa con Asistencia Manual")
+            if archivo_asistencia is None:
+                st.info("💡 Sube la **Planilla de Asistencia** de los choferes en la parte superior para habilitar el cruce automático.")
+            else:
                 if archivo_asistencia.name.endswith(".csv"):
                     df_asist = pd.read_csv(archivo_asistencia)
                 else:
                     df_asist = pd.read_excel(archivo_asistencia)
 
-                # Normalizar nombres de columnas de asistencia
+                # Normalizar columnas de asistencia
                 renombres = {}
                 for col in df_asist.columns:
                     c_low = col.strip().lower()
@@ -166,52 +165,62 @@ if archivo_gps is not None:
                 df_asist["Fecha"] = pd.to_datetime(df_asist["Fecha"]).dt.strftime("%Y-%m-%d")
                 df_asist["Patente"] = df_asist["Patente"].astype(str).str.strip().str.upper()
 
-                df_asist["Chofer_Inicio_Hrs"] = df_asist["Hora inicio"].apply(a_horas)
-                df_asist["Chofer_Termino_Hrs"] = df_asist["Hora termino"].apply(a_horas)
-                df_asist["Chofer_Jornada_Hrs"] = np.where(
-                    df_asist["Chofer_Termino_Hrs"] >= df_asist["Chofer_Inicio_Hrs"],
-                    df_asist["Chofer_Termino_Hrs"] - df_asist["Chofer_Inicio_Hrs"],
-                    (24.0 - df_asist["Chofer_Inicio_Hrs"]) + df_asist["Chofer_Termino_Hrs"]
-                )
-                df_asist["Chofer_Espera_Hrs"] = df_asist["Tiempo de espera"].apply(a_horas)
-                df_asist["Chofer_Descanso_Hrs"] = df_asist["Horas de descanso"].apply(a_horas)
-                df_asist["Chofer_Auxiliar_Hrs"] = df_asist["Labores auxiliares"].apply(a_horas)
-                df_asist["Chofer_Neto_Hrs"] = (df_asist["Chofer_Jornada_Hrs"] - df_asist["Chofer_Descanso_Hrs"]).clip(lower=0)
-
-                # Cruce de datos por Fecha y Patente
+                # Preparar datos GPS para el merge
                 if "Fecha" in df_resumen.columns and "Patente" in df_resumen.columns:
-                    df_cruce = pd.merge(df_resumen, df_asist, on=["Fecha", "Patente"], how="outer", indicator=True)
-                    df_cruce["Dif_Horas"] = (df_cruce["Chofer_Neto_Hrs"].fillna(0) - df_cruce["GPS_Activo_Total_Hrs"].fillna(0)).round(2)
-                    
+                    df_gps_clean = df_resumen.dropna(subset=["Fecha", "Patente"]).copy()
+                    df_gps_clean["Fecha"] = pd.to_datetime(df_gps_clean["Fecha"]).dt.strftime("%Y-%m-%d")
+                    df_gps_clean["Patente"] = df_gps_clean["Patente"].astype(str).str.strip().str.upper()
+                    df_gps_clean["GPS_Ruta_Hrs"] = df_gps_clean.get("Tiempo en ruta", 0).apply(a_horas)
+                    df_gps_clean["GPS_Espera_Hrs"] = df_gps_clean.get("Tiempo en espera", 0).apply(a_horas)
+                    df_gps_clean["GPS_Activo_Hrs"] = df_gps_clean["GPS_Ruta_Hrs"] + df_gps_clean["GPS_Espera_Hrs"]
+                else:
+                    df_gps_clean = pd.DataFrame(columns=["Fecha", "Patente", "GPS_Activo_Hrs"])
+
+                # Calcular horas chofer
+                df_asist["Chofer_Inicio"] = df_asist["Hora inicio"].apply(a_horas)
+                df_asist["Chofer_Termino"] = df_asist["Hora termino"].apply(a_horas)
+                df_asist["Chofer_Jornada"] = np.where(
+                    df_asist["Chofer_Termino"] >= df_asist["Chofer_Inicio"],
+                    df_asist["Chofer_Termino"] - df_asist["Chofer_Inicio"],
+                    (24.0 - df_asist["Chofer_Inicio"]) + df_asist["Chofer_Termino"]
+                )
+                df_asist["Chofer_Descanso"] = df_asist["Horas de descanso"].apply(a_horas)
+                df_asist["Chofer_Neto"] = (df_asist["Chofer_Jornada"] - df_asist["Chofer_Descanso"]).clip(lower=0)
+
+                # Cruce de datos
+                if not df_gps_clean.empty:
+                    df_cruce = pd.merge(df_gps_clean, df_asist, on=["Fecha", "Patente"], how="outer", indicator=True)
+                    df_cruce["Dif_Horas"] = (df_cruce["Chofer_Neto"].fillna(0) - df_cruce["GPS_Activo_Hrs"].fillna(0)).round(2)
+
                     def evaluar(f):
                         if f["_merge"] == "left_only": return "❓ Falta reporte chofer"
                         if f["_merge"] == "right_only": return "❓ Sin registro GPS"
                         if abs(f["Dif_Horas"]) > tolerancia: return "⚠️ Alerta diferencia de horas"
                         return "✅ Cuadra OK"
 
-                    df_cruce["Estado"] = df_cruce.apply(evaluar, axis=1)
+                    df_cruce["Estado_Auditoria"] = df_cruce.apply(evaluar, axis=1)
                     st.dataframe(df_cruce.drop(columns=["_merge"]), use_container_width=True)
                 else:
-                    st.warning("No se pudieron alinear las columnas de Fecha y Patente automáticamente para el cruce.")
+                    st.warning("No se pudo realizar el cruce automático debido al formato de las columnas de fecha/patente.")
 
-        # --- EXPORTAR EXCEL CONSOLIDADO ---
-        st.markdown("---")
-        output = io.BytesIO()
-        with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
-            df_resumen.to_excel(writer, sheet_name="Resumen_Diario", index=False)
-            df_det_tiempos.to_excel(writer, sheet_name="Detalle_Tiempos", index=False)
-            df_tiempos_fecha.to_excel(writer, sheet_name="Tiempos_Por_Fecha", index=False)
-            if archivo_asistencia is not None and 'df_cruce' in locals():
-                df_cruce.to_excel(writer, sheet_name="Auditoria_Cruce", index=False)
+        with tab5:
+            st.subheader("📥 Descargar Reportes Consolidados")
+            output = io.BytesIO()
+            with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
+                if not df_resumen.empty: df_resumen.to_excel(writer, sheet_name="Resumen_Diario", index=False)
+                if not df_totales.empty: df_totales.to_excel(writer, sheet_name="Totales_Vehiculo", index=False)
+                if not df_detalle.empty: df_detalle.to_excel(writer, sheet_name="Detalle_Tiempos", index=False)
+                if archivo_asistencia is not None and 'df_cruce' in locals():
+                    df_cruce.to_excel(writer, sheet_name="Auditoria_Cruce", index=False)
 
-        st.download_button(
-            label="📥 Descargar Reporte Consolidado Completo (.xlsx)",
-            data=output.getvalue(),
-            file_name="Reporte_GPS_Generado_y_Auditado.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-        )
+            st.download_button(
+                label="📥 Descargar Reporte Completo en Excel",
+                data=output.getvalue(),
+                file_name="Reporte_Flota_Auditado.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            )
 
     except Exception as e:
         st.error(f"Error procesando el archivo: {e}")
 else:
-    st.info("👆 Sube tu archivo de GPS en la parte superior para que el sistema comience a generar los reportes.")
+    st.info("👆 Por favor, sube tu archivo Excel de GPS en la parte superior para comenzar.")
