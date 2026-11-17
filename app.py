@@ -14,36 +14,55 @@ st.set_page_config(
 st.title("🚛 Sistema Web: Procesamiento de GPS y Auditoría")
 st.markdown(
     "Configura los estacionamientos de la empresa, sube el reporte crudo del GPS y visualiza "
-    "automáticamente los reportes de **Tiempos por Fecha** y el **Resumen Diario** con sus respectivas clasificaciones."
+    "automáticamente los reportes formateados en horas, minutos y segundos (**hh:mm:ss**)."
 )
 
-# --- FUNCIONES AUXILIARES ---
-def a_horas(valor):
-    if pd.isna(valor) or valor == "":
+# --- FUNCIONES AUXILIARES DE TIEMPO ---
+def duration_to_seconds(val):
+    """Convierte cualquier formato de duración del GPS a segundos totales."""
+    if pd.isna(val) or val == "":
         return 0.0
-    if isinstance(valor, (int, float)):
-        return float(valor)
-    if isinstance(valor, timedelta):
-        return valor.total_seconds() / 3600.0
-    if isinstance(valor, (time, datetime)):
-        return valor.hour + valor.minute / 60.0 + valor.second / 3600.0
-
-    texto = str(valor).strip()
+    if isinstance(val, (int, float)):
+        return float(val) * 3600.0
+    if isinstance(val, timedelta):
+        return val.total_seconds()
+    if isinstance(val, (time, datetime)):
+        return val.hour * 3600 + val.minute * 60 + val.second
+    
+    texto = str(val).strip()
     if ":" in texto:
-        if " " in texto:
-            texto = texto.split(" ")[-1]
         partes = texto.split(":")
         try:
-            if len(partes) == 3:
-                return int(partes[0]) + int(partes[1]) / 60.0 + float(partes[2]) / 3600.0
-            elif len(partes) == 2:
-                return int(partes[0]) + int(partes[1]) / 60.0
+            if len(partes) == 4: # Formato días:horas:minutos:segundos (ej: 2:1:57:31)
+                dias = int(partes[0])
+                horas = int(partes[1])
+                mins = int(partes[2])
+                secs = int(partes[3])
+                return dias * 86400 + horas * 3600 + mins * 60 + secs
+            elif len(partes) == 3: # Formato horas:minutos:segundos
+                return int(partes[0]) * 3600 + int(partes[1]) * 60 + float(partes[2])
+            elif len(partes) == 2: # Formato horas:minutos
+                return int(partes[0]) * 3600 + int(partes[1]) * 60
         except ValueError:
             return 0.0
     try:
-        return float(texto.replace(",", "."))
+        return float(texto.replace(",", ".")) * 3600.0
     except ValueError:
         return 0.0
+
+def format_seconds_to_hms(seconds):
+    """Convierte segundos totales a formato estricto hh:mm:ss."""
+    if pd.isna(seconds) or seconds < 0:
+        return "00:00:00"
+    total_secs = int(round(seconds))
+    hours = total_secs // 3600
+    minutes = (total_secs % 3600) // 60
+    secs = total_secs % 60
+    return f"{hours:02d}:{minutes:02d}:{secs:02d}"
+
+def a_horas_decimal(valor):
+    """Retorna horas en decimal para cálculos de asistencia."""
+    return duration_to_seconds(valor) / 3600.0
 
 def generar_plantilla_asistencia():
     columnas = ["Fecha", "Patente", "Hora inicio", "Hora termino", "Tiempo de espera", "Horas de descanso", "Labores auxiliares"]
@@ -89,23 +108,26 @@ if archivo_gps is not None:
         df_raw = pd.read_excel(archivo_gps, sheet_name=0, header=None)
         st.success(f"✅ ¡Archivo GPS cargado! Estacionamientos activos: **{estacion_1}** y **{estacion_2}**.")
 
-        # --- PROCESAMIENTO Y PARSER DE DATOS CRUDOS ---
+        # --- PARSER INTELIGENTE Y ROBUSTO PARA LOS 4 VEHÍCULOS ---
         registros_detalles = []
         vehiculo_actual = "DESCONOCIDO"
 
         for idx, row in df_raw.iterrows():
             val_0 = str(row[0]).strip() if pd.notna(row[0]) else ""
             
-            # Detectar patente o vehículo en los bloques
-            if len(val_0) >= 5 and len(val_0) <= 8 and not "Período" in val_0 and not "Total" in val_0 and not "Duración" in val_0 and not "Distancia" in val_0 and not "Hora" in val_0:
-                vehiculo_actual = val_0
+            # Detectar patente o vehículo (incluso si viene con descripción larga como SLLT28-MITSUBISHI)
+            if any(p in val_0.upper() for p in ["PCDB55", "RBGP67", "SLLT28", "VM350"]):
+                for patente_ref in ["PCDB55", "RBGP67", "SLLT28", "VM350"]:
+                    if patente_ref in val_0.upper():
+                        vehiculo_actual = patente_ref
+                        break
 
             # Detectar filas con intervalos de tiempo (Hora Inicio y Hora Fin)
             if pd.notna(row[0]) and pd.notna(row[1]) and ("-" in str(row[0]) or "/" in str(row[0])) and not "Hora" in str(row[0]):
                 direccion = str(row[3]) if pd.notna(row[3]) else ""
                 estado_mov = str(row[4]).lower() if pd.notna(row[4]) else ""
                 duracion_str = row[2]
-                duracion_hrs = a_horas(duracion_str)
+                duracion_secs = duration_to_seconds(duracion_str)
 
                 # Clasificación según reglas de negocio y estacionamientos
                 if estacion_1.lower() in direccion.lower() or estacion_2.lower() in direccion.lower():
@@ -121,7 +143,7 @@ if archivo_gps is not None:
                     "Hora Inicio": row[0],
                     "Hora Fin": row[1],
                     "Duración": duracion_str,
-                    "Duracion_Hrs": duracion_hrs,
+                    "Duracion_Secs": duracion_secs,
                     "Dirección": direccion,
                     "Clasificación": clasificacion
                 })
@@ -133,7 +155,7 @@ if archivo_gps is not None:
             df_pivot = df_eventos.pivot_table(
                 index=["Fecha", "Patente"],
                 columns="Clasificación",
-                values="Duracion_Hrs",
+                values="Duracion_Secs",
                 aggfunc="sum",
                 fill_value=0.0
             ).reset_index()
@@ -142,13 +164,42 @@ if archivo_gps is not None:
                 if col not in df_pivot.columns:
                     df_pivot[col] = 0.0
 
-            df_pivot["Total Horas Monitoreadas"] = df_pivot["Tiempo en ruta"] + df_pivot["Tiempo en espera"] + df_pivot["Estacionamiento"]
-            df_resumen_diario = df_pivot[["Fecha", "Patente", "Tiempo en ruta", "Tiempo en espera", "Estacionamiento", "Total Horas Monitoreadas"]]
+            df_pivot["Total Horas Monitoreadas Secs"] = df_pivot["Tiempo en ruta"] + df_pivot["Tiempo en espera"] + df_pivot["Estacionamiento"]
+            
+            # Formatear todas las columnas de tiempo a hh:mm:ss
+            df_resumen_diario = pd.DataFrame({
+                "Fecha": df_pivot["Fecha"],
+                "Patente": df_pivot["Patente"],
+                "Tiempo en ruta": df_pivot["Tiempo en ruta"].apply(format_seconds_to_hms),
+                "Tiempo en espera": df_pivot["Tiempo en espera"].apply(format_seconds_to_hms),
+                "Estacionamiento": df_pivot["Estacionamiento"].apply(format_seconds_to_hms),
+                "Total Horas Monitoreadas": df_pivot["Total Horas Monitoreadas Secs"].apply(format_seconds_to_hms)
+            })
 
-            # 2. CONSTRUCCIÓN DE TIEMPOS POR FECHA (Totales por Vehículo)
-            df_totales_vehiculo = df_eventos.groupby("Patente", as_index=False).agg({
-                "Duracion_Hrs": "sum"
-            }).rename(columns={"Duracion_Hrs": "Total Registrado (Hrs)"})
+            # 2. CONSTRUCCIÓN DE TIEMPOS POR FECHA (Totales por los 4 Vehículos)
+            df_totales_vehiculo_pivot = df_eventos.pivot_table(
+                index="Patente",
+                columns="Clasificación",
+                values="Duracion_Secs",
+                aggfunc="sum",
+                fill_value=0.0
+            ).reset_index()
+
+            for col in ["Tiempo en ruta", "Tiempo en espera", "Estacionamiento"]:
+                if col not in df_totales_vehiculo_pivot.columns:
+                    df_totales_vehiculo_pivot[col] = 0.0
+
+            df_totales_vehiculo_pivot["Espera Total Secs"] = df_totales_vehiculo_pivot["Tiempo en espera"] + df_totales_vehiculo_pivot["Estacionamiento"]
+            df_totales_vehiculo_pivot["Tiempo Registrado Secs"] = df_totales_vehiculo_pivot["Espera Total Secs"] + df_totales_vehiculo_pivot["Tiempo en ruta"]
+
+            df_totales_vehiculo = pd.DataFrame({
+                "Vehiculo": df_totales_vehiculo_pivot["Patente"],
+                "Tiempo recorrido": df_totales_vehiculo_pivot["Tiempo en ruta"].apply(format_seconds_to_hms),
+                "Espera estacionamiento": df_totales_vehiculo_pivot["Estacionamiento"].apply(format_seconds_to_hms),
+                "Espera en ruta": df_totales_vehiculo_pivot["Tiempo en espera"].apply(format_seconds_to_hms),
+                "Espera total": df_totales_vehiculo_pivot["Espera Total Secs"].apply(format_seconds_to_hms),
+                "Tiempo registrado": df_totales_vehiculo_pivot["Tiempo Registrado Secs"].apply(format_seconds_to_hms)
+            })
         else:
             df_resumen_diario = pd.DataFrame()
             df_totales_vehiculo = pd.DataFrame()
@@ -164,14 +215,14 @@ if archivo_gps is not None:
 
         with tab1:
             st.subheader("Resumen Diario por Patente y Fecha")
-            st.markdown(f"Clasificación considerando estacionamientos en: **{estacion_1}** y **{estacion_2}**.")
+            st.markdown(f"Clasificación considerando estacionamientos en: **{estacion_1}** y **{estacion_2}**. Tiempos en formato **hh:mm:ss**.")
             if not df_resumen_diario.empty:
                 st.dataframe(df_resumen_diario, use_container_width=True)
             else:
                 st.warning("No hay datos suficientes para generar el resumen diario.")
 
         with tab2:
-            st.subheader("Tiempos Totales por Vehículo")
+            st.subheader("Tiempos Totales por Vehículo (Todos los vehículos detectados)")
             if not df_totales_vehiculo.empty:
                 st.dataframe(df_totales_vehiculo, use_container_width=True)
             else:
@@ -205,18 +256,18 @@ if archivo_gps is not None:
                 df_asist["Fecha"] = pd.to_datetime(df_asist["Fecha"]).dt.strftime("%Y-%m-%d")
                 df_asist["Patente"] = df_asist["Patente"].astype(str).str.strip().str.upper()
 
-                # Tiempo activo GPS = Ruta + Espera fuera de estacionamiento
-                df_gps_cruce = df_resumen_diario.copy()
-                df_gps_cruce["GPS_Activo_Hrs"] = df_gps_cruce["Tiempo en ruta"] + df_gps_cruce["Tiempo en espera"]
+                # Preparar base numérica para comparar con asistencia
+                df_gps_cruce = df_pivot[["Fecha", "Patente", "Tiempo en ruta", "Tiempo en espera"]].copy()
+                df_gps_cruce["GPS_Activo_Hrs"] = (df_gps_cruce["Tiempo en ruta"] + df_gps_cruce["Tiempo en espera"]) / 3600.0
 
-                df_asist["Chofer_Inicio"] = df_asist["Hora inicio"].apply(a_horas)
-                df_asist["Chofer_Termino"] = df_asist["Hora termino"].apply(a_horas)
+                df_asist["Chofer_Inicio"] = df_asist["Hora inicio"].apply(a_horas_decimal)
+                df_asist["Chofer_Termino"] = df_asist["Hora termino"].apply(a_horas_decimal)
                 df_asist["Chofer_Jornada"] = np.where(
                     df_asist["Chofer_Termino"] >= df_asist["Chofer_Inicio"],
                     df_asist["Chofer_Termino"] - df_asist["Chofer_Inicio"],
                     (24.0 - df_asist["Chofer_Inicio"]) + df_asist["Chofer_Termino"]
                 )
-                df_asist["Chofer_Descanso"] = df_asist["Horas de descanso"].apply(a_horas)
+                df_asist["Chofer_Descanso"] = df_asist["Horas de descanso"].apply(a_horas_decimal)
                 df_asist["Chofer_Neto"] = (df_asist["Chofer_Jornada"] - df_asist["Chofer_Descanso"]).clip(lower=0)
 
                 df_cruce = pd.merge(df_gps_cruce, df_asist, on=["Fecha", "Patente"], how="outer", indicator=True)
