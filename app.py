@@ -13,8 +13,8 @@ st.set_page_config(
 
 st.title("🚛 Sistema Web: Procesamiento de GPS y Auditoría de Flota")
 st.markdown(
-    "Sistema definitivo para procesar reportes crudos de GPS, configurar estacionamientos, "
-    "visualizar reportes en formato **hh:mm:ss** e incorporar el registro del nombre del chofer en la asistencia."
+    "Sistema definitivo para procesar reportes crudos de GPS, configurar estacionamientos de forma dinámica, "
+    "visualizar reportes en formato **hh:mm:ss** y realizar la auditoría con la asistencia manual."
 )
 
 # --- FUNCIONES AUXILIARES DE TIEMPO ---
@@ -82,12 +82,17 @@ def generar_plantilla_asistencia():
         ejemplo.to_excel(writer, sheet_name="Asistencia", index=False)
     return buffer.getvalue()
 
-# --- BARRA LATERAL: CONFIGURACIÓN Y ARCHIVOS ---
+# --- BARRA LATERAL: CONFIGURACIÓN DINÁMICA DE ESTACIONAMIENTOS ---
 with st.sidebar:
-    st.header("📍 Estacionamientos Definidos")
-    estacion_1 = st.text_input("Estacionamiento 1", value="Guido Beck de Ramberga")
-    estacion_2 = st.text_input("Estacionamiento 2", value="Ruta 5 en Freire")
+    st.header("📍 Configuración de Estacionamientos")
+    cant_estacionamientos = st.number_input("¿Cuántos estacionamientos desea definir?", min_value=1, max_value=10, value=2, step=1)
     
+    lista_estacionamientos = []
+    for i in range(int(cant_estacionamientos)):
+        est = st.text_input(f"Nombre Estacionamiento {i+1}", value=f"Base {i+1}" if i > 0 else "Guido Beck de Ramberga")
+        if est.strip():
+            lista_estacionamientos.append(est.strip())
+
     st.markdown("---")
     st.header("⚙️ Parámetros de Auditoría")
     tolerancia_hrs = st.slider("Tolerancia diferencia horas (Asistencia)", 0.0, 3.0, 0.5, 0.25)
@@ -114,7 +119,7 @@ if archivo_gps is not None:
     try:
         df_raw = pd.read_excel(archivo_gps, sheet_name=0, header=None)
 
-        # --- PARSER INTELIGENTE Y ROBUSTO PARA LOS 4 VEHÍCULOS ---
+        # --- PARSER INTELIGENTE Y ROBUSTO PARA LOS VEHÍCULOS ---
         registros_detalles = []
         vehiculo_actual = "DESCONOCIDO"
 
@@ -133,7 +138,10 @@ if archivo_gps is not None:
                 duracion_str = row[2]
                 duracion_secs = duration_to_seconds(duracion_str)
 
-                if estacion_1.lower() in direccion.lower() or estacion_2.lower() in direccion.lower():
+                # Clasificación estricta basada exactamente en los estacionamientos definidos por el usuario
+                es_estacionamiento = any(e.lower() in direccion.lower() for e in lista_estacionamientos if e)
+
+                if es_estacionamiento:
                     clasificacion = "Estacionamiento"
                 elif "movimiento" in estado_mov:
                     clasificacion = "Tiempo en ruta"
@@ -268,7 +276,7 @@ if archivo_gps is not None:
 
         with tab1:
             st.subheader("Resumen Diario por Patente y Fecha")
-            st.markdown("Tiempos en formato estricto **hh:mm:ss**. Filtrado mediante el panel izquierdo.")
+            st.markdown(f"Estacionamientos activos: **{', '.join(lista_estacionamientos)}**. Tiempos en formato **hh:mm:ss**.")
             if not df_resumen_diario.empty:
                 st.dataframe(df_resumen_diario, use_container_width=True, hide_index=True)
             else:
@@ -374,4 +382,4 @@ if archivo_gps is not None:
     except Exception as e:
         st.error(f"Error procesando el archivo: {e}")
 else:
-    st.info("👆 Configura los estacionamientos a la izquierda y sube tu archivo de GPS para comenzar.")
+    st.info("👆 Define tus estacionamientos a la izquierda y sube tu archivo de GPS para comenzar.")
