@@ -14,7 +14,7 @@ st.set_page_config(
 st.title("🚛 Sistema Web: Procesamiento de GPS y Auditoría de Flota")
 st.markdown(
     "Sistema definitivo para procesar reportes crudos de GPS, configurar estacionamientos, "
-    "visualizar reportes en formato **hh:mm:ss** y realizar la auditoría con la asistencia manual."
+    "visualizar reportes y realizar la auditoría con la asistencia manual en formato **hh:mm:ss**."
 )
 
 # --- FUNCIONES AUXILIARES DE TIEMPO ---
@@ -60,6 +60,17 @@ def format_seconds_to_hms(seconds):
     secs = total_secs % 60
     return f"{hours:02d}:{minutes:02d}:{secs:02d}"
 
+def format_signed_seconds_to_hms(seconds):
+    """Convierte segundos de diferencia a formato hh:mm:ss con signo (+/-)."""
+    if pd.isna(seconds):
+        return "00:00:00"
+    sign = "-" if seconds < 0 else "+"
+    total_secs = int(round(abs(seconds)))
+    hours = total_secs // 3600
+    minutes = (total_secs % 3600) // 60
+    secs = total_secs % 60
+    return f"{sign}{hours:02d}:{minutes:02d}:{secs:02d}"
+
 def a_horas_decimal(valor):
     """Retorna horas en decimal para cálculos de asistencia."""
     return duration_to_seconds(valor) / 3600.0
@@ -83,7 +94,7 @@ with st.sidebar:
     
     st.markdown("---")
     st.header("⚙️ Parámetros")
-    tolerancia = st.slider("Tolerancia diferencia horas (Asistencia)", 0.0, 3.0, 0.5, 0.25)
+    tolerancia_hrs = st.slider("Tolerancia diferencia horas (Asistencia)", 0.0, 3.0, 0.5, 0.25)
     
     st.markdown("---")
     st.download_button(
@@ -232,7 +243,7 @@ if archivo_gps is not None:
 
         with tab1:
             st.subheader("Resumen Diario por Patente y Fecha")
-            st.markdown(f"Tiempos en formato **hh:mm:ss**. Filtros activos aplicados.")
+            st.markdown("Tiempos en formato estricto **hh:mm:ss**. Filtros activos aplicados.")
             if not df_resumen_diario.empty:
                 st.dataframe(df_resumen_diario, use_container_width=True)
             else:
@@ -251,7 +262,7 @@ if archivo_gps is not None:
                 st.dataframe(df_filtrado, use_container_width=True)
 
         with tab4:
-            st.subheader("Auditoría: GPS vs Asistencia Manual")
+            st.subheader("Auditoría: GPS vs Asistencia Manual (Tiempos en hh:mm:ss)")
             if archivo_asistencia is None:
                 st.info("💡 Sube la **Planilla de Asistencia** de los choferes para realizar la comparación.")
             else:
@@ -273,30 +284,52 @@ if archivo_gps is not None:
                 df_asist["Fecha"] = pd.to_datetime(df_asist["Fecha"]).dt.strftime("%Y-%m-%d")
                 df_asist["Patente"] = df_asist["Patente"].astype(str).str.strip().str.upper()
 
+                # Obtener segundos activos de GPS (Ruta + Espera)
                 df_gps_cruce = df_pivot[["Fecha", "Patente", "Tiempo en ruta", "Tiempo en espera"]].copy()
-                df_gps_cruce["GPS_Activo_Hrs"] = (df_gps_cruce["Tiempo en ruta"] + df_gps_cruce["Tiempo en espera"]) / 3600.0
+                df_gps_cruce["GPS_Activo_Secs"] = df_gps_cruce["Tiempo en ruta"] + df_gps_cruce["Tiempo en espera"]
 
-                df_asist["Chofer_Inicio"] = df_asist["Hora inicio"].apply(a_horas_decimal)
-                df_asist["Chofer_Termino"] = df_asist["Hora termino"].apply(a_horas_decimal)
-                df_asist["Chofer_Jornada"] = np.where(
-                    df_asist["Chofer_Termino"] >= df_asist["Chofer_Inicio"],
-                    df_asist["Chofer_Termino"] - df_asist["Chofer_Inicio"],
-                    (24.0 - df_asist["Chofer_Inicio"]) + df_asist["Chofer_Termino"]
+                # Calcular segundos chofer
+                df_asist["Chofer_Inicio_Secs"] = df_asist["Hora inicio"].apply(duration_to_seconds)
+                df_asist["Chofer_Termino_Secs"] = df_asist["Hora termino"].apply(duration_to_seconds)
+                
+                # Jornada considerando cruce de medianoche si corresponde
+                jornada_secs = np.where(
+                    df_asist["Chofer_Termino_Secs"] >= df_asist["Chofer_Inicio_Secs"],
+                    df_asist["Chofer_Termino_Secs"] - df_asist["Chofer_Inicio_Secs"],
+                    (86400.0 - df_asist["Chofer_Inicio_Secs"]) + df_asist["Chofer_Termino_Secs"]
                 )
-                df_asist["Chofer_Descanso"] = df_asist["Horas de descanso"].apply(a_horas_decimal)
-                df_asist["Chofer_Neto"] = (df_asist["Chofer_Jornada"] - df_asist["Chofer_Descanso"]).clip(lower=0)
+                df_asist["Chofer_Jornada_Secs"] = jornada_secs
+                df_asist["Chofer_Descanso_Secs"] = df_asist["Horas de descanso"].apply(duration_to_seconds)
+                df_asist["Chofer_Neto_Secs"] = np.clip(df_asist["Chofer_Jornada_Secs"] - df_asist["Chofer_Descanso_Secs"], 0, None)
 
+                # Cruce de datos
                 df_cruce = pd.merge(df_gps_cruce, df_asist, on=["Fecha", "Patente"], how="outer", indicator=True)
-                df_cruce["Dif_Horas"] = (df_cruce["Chofer_Neto"].fillna(0) - df_cruce["GPS_Activo_Hrs"].fillna(0)).round(2)
+                
+                # Calcular diferencia en segundos
+                df_cruce["Dif_Secs"] = df_cruce["Chofer_Neto_Secs"].fillna(0) - df_cruce["GPS_Activo_Secs"].fillna(0)
+                
+                # Construir tabla de auditoría con formato hh:mm:ss
+                df_cruce_display = pd.DataFrame({
+                    "Fecha": df_cruce["Fecha"],
+                    "Patente": df_cruce["Patente"],
+                    "GPS Activo (Ruta+Espera)": df_cruce["GPS_Activo_Secs"].apply(format_seconds_to_hms),
+                    "Hora Inicio Chofer": df_cruce["Hora inicio"],
+                    "Hora Término Chofer": df_cruce["Hora termino"],
+                    "Jornada Chofer Neta": df_cruce["Chofer_Neto_Secs"].apply(format_seconds_to_hms),
+                    "Diferencia Horaria": df_cruce["Dif_Secs"].apply(format_signed_seconds_to_hms),
+                    "_merge": df_cruce["_merge"]
+                })
+
+                tolerancia_secs = tolerancia_hrs * 3600.0
 
                 def evaluar(f):
                     if f["_merge"] == "left_only": return "❓ Falta reporte chofer"
                     if f["_merge"] == "right_only": return "❓ Sin registro GPS"
-                    if abs(f["Dif_Horas"]) > tolerancia: return "⚠️ Alerta diferencia de horas"
+                    if abs(f["Dif_Secs"]) > tolerancia_secs: return "⚠️ Alerta diferencia de horas"
                     return "✅ Cuadra OK"
 
-                df_cruce["Estado_Auditoria"] = df_cruce.apply(evaluar, axis=1)
-                st.dataframe(df_cruce.drop(columns=["_merge"]), use_container_width=True)
+                df_cruce_display["Estado de Auditoría"] = df_cruce.apply(evaluar, axis=1)
+                st.dataframe(df_cruce_display.drop(columns=["_merge"]), use_container_width=True)
 
         with tab5:
             st.subheader("📥 Descargar Reportes Consolidados")
@@ -304,8 +337,8 @@ if archivo_gps is not None:
             with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
                 if not df_resumen_diario.empty: df_resumen_diario.to_excel(writer, sheet_name="Resumen_Diario", index=False)
                 if not df_totales_vehiculo.empty: df_totales_vehiculo.to_excel(writer, sheet_name="Tiempos_Por_Fecha", index=False)
-                if archivo_asistencia is not None and 'df_cruce' in locals():
-                    df_cruce.to_excel(writer, sheet_name="Auditoria_Cruce", index=False)
+                if archivo_asistencia is not None and 'df_cruce_display' in locals():
+                    df_cruce_display.to_excel(writer, sheet_name="Auditoria_Cruce", index=False)
 
             st.download_button(
                 label="📥 Descargar Excel Completo",
