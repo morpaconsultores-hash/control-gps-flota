@@ -14,12 +14,11 @@ st.set_page_config(
 st.title("🚛 Sistema Web: Procesamiento de GPS y Auditoría de Flota")
 st.markdown(
     "Sistema definitivo para procesar reportes crudos de GPS, configurar estacionamientos, "
-    "visualizar reportes y realizar la auditoría con la asistencia manual en formato **hh:mm:ss**."
+    "visualizar reportes en formato **hh:mm:ss** y filtrar la información mediante botones y selectores en español."
 )
 
 # --- FUNCIONES AUXILIARES DE TIEMPO ---
 def duration_to_seconds(val):
-    """Convierte cualquier formato de duración del GPS a segundos totales."""
     if pd.isna(val) or val == "":
         return 0.0
     if isinstance(val, (int, float)):
@@ -33,15 +32,15 @@ def duration_to_seconds(val):
     if ":" in texto:
         partes = texto.split(":")
         try:
-            if len(partes) == 4: # Formato días:horas:minutos:segundos (ej: 2:1:57:31)
+            if len(partes) == 4:
                 dias = int(partes[0])
                 horas = int(partes[1])
                 mins = int(partes[2])
                 secs = int(partes[3])
                 return dias * 86400 + horas * 3600 + mins * 60 + secs
-            elif len(partes) == 3: # Formato horas:minutos:segundos
+            elif len(partes) == 3:
                 return int(partes[0]) * 3600 + int(partes[1]) * 60 + float(partes[2])
-            elif len(partes) == 2: # Formato horas:minutos
+            elif len(partes) == 2:
                 return int(partes[0]) * 3600 + int(partes[1]) * 60
         except ValueError:
             return 0.0
@@ -51,7 +50,6 @@ def duration_to_seconds(val):
         return 0.0
 
 def format_seconds_to_hms(seconds):
-    """Convierte segundos totales a formato estricto hh:mm:ss."""
     if pd.isna(seconds) or seconds < 0:
         return "00:00:00"
     total_secs = int(round(seconds))
@@ -61,7 +59,6 @@ def format_seconds_to_hms(seconds):
     return f"{hours:02d}:{minutes:02d}:{secs:02d}"
 
 def format_signed_seconds_to_hms(seconds):
-    """Convierte segundos de diferencia a formato hh:mm:ss con signo (+/-)."""
     if pd.isna(seconds):
         return "00:00:00"
     sign = "-" if seconds < 0 else "+"
@@ -72,7 +69,6 @@ def format_signed_seconds_to_hms(seconds):
     return f"{sign}{hours:02d}:{minutes:02d}:{secs:02d}"
 
 def a_horas_decimal(valor):
-    """Retorna horas en decimal para cálculos de asistencia."""
     return duration_to_seconds(valor) / 3600.0
 
 def generar_plantilla_asistencia():
@@ -93,7 +89,7 @@ with st.sidebar:
     estacion_2 = st.text_input("Estacionamiento 2", value="Ruta 5 en Freire")
     
     st.markdown("---")
-    st.header("⚙️ Parámetros")
+    st.header("⚙️ Parámetros de Auditoría")
     tolerancia_hrs = st.slider("Tolerancia diferencia horas (Asistencia)", 0.0, 3.0, 0.5, 0.25)
     
     st.markdown("---")
@@ -158,22 +154,53 @@ if archivo_gps is not None:
         df_eventos = pd.DataFrame(registros_detalles)
 
         if not df_eventos.empty:
-            # --- BARRA LATERAL: FILTROS DINÁMICOS POR FECHA Y PATENTE ---
+            # --- PANEL DE FILTROS CON BOTONES EN ESPAÑOL ---
             with st.sidebar:
                 st.markdown("---")
-                st.header("🔎 Filtros de Visualización")
+                st.header("🔍 Panel de Filtros")
                 
                 patentes_disponibles = sorted(df_eventos["Patente"].unique().tolist())
-                patentes_seleccionadas = st.multiselect("Filtrar por Patente(s)", patentes_disponibles, default=patentes_disponibles)
                 
+                st.markdown("**Seleccionar Patentes:**")
+                patentes_seleccionadas = []
+                
+                # Botones rápidos para marcar/desmarcar patentes
+                col_b1, col_b2 = st.columns(2)
+                with col_b1:
+                    todas = st.button("Todas")
+                with col_b2:
+                    ninguna = st.button("Ninguna")
+                
+                # Estado para selección de patentes
+                if "patentes_filtro" not in st.session_state:
+                    st.session_state.patentes_filtro = patentes_disponibles
+
+                if todas:
+                    st.session_state.patentes_filtro = patentes_disponibles
+                if ninguna:
+                    st.session_state.patentes_filtro = []
+
+                for p in patentes_disponibles:
+                    checked = p in st.session_state.patentes_filtro
+                    if st.checkbox(p, value=checked, key=f"chk_{p}"):
+                        if p not in patentes_seleccionadas:
+                            patentes_seleccionadas.append(p)
+                    else:
+                        if p in patentes_seleccionadas:
+                            patentes_seleccionadas.remove(p)
+                st.session_state.patentes_filtro = patentes_seleccionadas
+
+                st.markdown("---")
                 min_f = pd.to_datetime(df_eventos["Fecha"]).min().date()
                 max_f = pd.to_datetime(df_eventos["Fecha"]).max().date()
                 rango_fechas = st.date_input("Filtrar por Rango de Fechas", value=(min_f, max_f), min_value=min_f, max_value=max_f)
 
-            # Aplicar Filtros
+            # Aplicar Filtros al DataFrame
             df_filtrado = df_eventos.copy()
             if patentes_seleccionadas:
                 df_filtrado = df_filtrado[df_filtrado["Patente"].isin(patentes_seleccionadas)]
+            else:
+                df_filtrado = df_filtrado.iloc[0:0] # Vacío si no selecciona ninguna
             
             if isinstance(rango_fechas, tuple) and len(rango_fechas) == 2:
                 f_inicio, f_fin = rango_fechas
@@ -243,23 +270,23 @@ if archivo_gps is not None:
 
         with tab1:
             st.subheader("Resumen Diario por Patente y Fecha")
-            st.markdown("Tiempos en formato estricto **hh:mm:ss**. Filtros activos aplicados.")
+            st.markdown("Tiempos en formato estricto **hh:mm:ss**. Filtrado mediante el panel izquierdo.")
             if not df_resumen_diario.empty:
-                st.dataframe(df_resumen_diario, use_container_width=True)
+                st.dataframe(df_resumen_diario, use_container_width=True, hide_index=True)
             else:
                 st.warning("No hay datos para los filtros seleccionados.")
 
         with tab2:
             st.subheader("Tiempos Totales por Vehículo")
             if not df_totales_vehiculo.empty:
-                st.dataframe(df_totales_vehiculo, use_container_width=True)
+                st.dataframe(df_totales_vehiculo, use_container_width=True, hide_index=True)
             else:
                 st.warning("No hay datos para mostrar.")
 
         with tab3:
             st.subheader("Detalle Crudo Procesado del GPS")
             if not df_filtrado.empty:
-                st.dataframe(df_filtrado, use_container_width=True)
+                st.dataframe(df_filtrado, use_container_width=True, hide_index=True)
 
         with tab4:
             st.subheader("Auditoría: GPS vs Asistencia Manual (Tiempos en hh:mm:ss)")
@@ -292,7 +319,6 @@ if archivo_gps is not None:
                 df_asist["Chofer_Inicio_Secs"] = df_asist["Hora inicio"].apply(duration_to_seconds)
                 df_asist["Chofer_Termino_Secs"] = df_asist["Hora termino"].apply(duration_to_seconds)
                 
-                # Jornada considerando cruce de medianoche si corresponde
                 jornada_secs = np.where(
                     df_asist["Chofer_Termino_Secs"] >= df_asist["Chofer_Inicio_Secs"],
                     df_asist["Chofer_Termino_Secs"] - df_asist["Chofer_Inicio_Secs"],
@@ -302,13 +328,9 @@ if archivo_gps is not None:
                 df_asist["Chofer_Descanso_Secs"] = df_asist["Horas de descanso"].apply(duration_to_seconds)
                 df_asist["Chofer_Neto_Secs"] = np.clip(df_asist["Chofer_Jornada_Secs"] - df_asist["Chofer_Descanso_Secs"], 0, None)
 
-                # Cruce de datos
                 df_cruce = pd.merge(df_gps_cruce, df_asist, on=["Fecha", "Patente"], how="outer", indicator=True)
-                
-                # Calcular diferencia en segundos
                 df_cruce["Dif_Secs"] = df_cruce["Chofer_Neto_Secs"].fillna(0) - df_cruce["GPS_Activo_Secs"].fillna(0)
                 
-                # Construir tabla de auditoría con formato hh:mm:ss
                 df_cruce_display = pd.DataFrame({
                     "Fecha": df_cruce["Fecha"],
                     "Patente": df_cruce["Patente"],
@@ -329,7 +351,7 @@ if archivo_gps is not None:
                     return "✅ Cuadra OK"
 
                 df_cruce_display["Estado de Auditoría"] = df_cruce.apply(evaluar, axis=1)
-                st.dataframe(df_cruce_display.drop(columns=["_merge"]), use_container_width=True)
+                st.dataframe(df_cruce_display.drop(columns=["_merge"]), use_container_width=True, hide_index=True)
 
         with tab5:
             st.subheader("📥 Descargar Reportes Consolidados")
