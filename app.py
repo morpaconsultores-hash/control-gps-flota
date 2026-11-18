@@ -14,7 +14,7 @@ st.set_page_config(
 st.title("🚛 Sistema Web: Procesamiento de GPS y Auditoría de Flota")
 st.markdown(
     "Sistema definitivo para procesar reportes crudos de GPS, configurar estacionamientos, "
-    "visualizar reportes en formato **hh:mm:ss** y filtrar la información mediante botones y selectores en español."
+    "visualizar reportes en formato **hh:mm:ss** e incorporar el registro del nombre del chofer en la asistencia."
 )
 
 # --- FUNCIONES AUXILIARES DE TIEMPO ---
@@ -72,10 +72,10 @@ def a_horas_decimal(valor):
     return duration_to_seconds(valor) / 3600.0
 
 def generar_plantilla_asistencia():
-    columnas = ["Fecha", "Patente", "Hora inicio", "Hora termino", "Tiempo de espera", "Horas de descanso", "Labores auxiliares"]
+    columnas = ["Fecha", "Patente", "Nombre Chofer", "Hora inicio", "Hora termino", "Tiempo de espera", "Horas de descanso", "Labores auxiliares"]
     ejemplo = pd.DataFrame([
-        ["2026-10-01", "PCDB55", "08:00:00", "18:00:00", "01:00:00", "01:00:00", "00:30:00"],
-        ["2026-10-01", "SLLT28", "07:30:00", "19:30:00", "02:00:00", "01:00:00", "01:00:00"],
+        ["2026-10-01", "PCDB55", "Juan Pérez", "08:00:00", "18:00:00", "01:00:00", "01:00:00", "00:30:00"],
+        ["2026-10-01", "SLLT28", "Carlos Soto", "07:30:00", "19:30:00", "02:00:00", "01:00:00", "01:00:00"],
     ], columns=columnas)
     buffer = io.BytesIO()
     with pd.ExcelWriter(buffer, engine="xlsxwriter") as writer:
@@ -164,14 +164,12 @@ if archivo_gps is not None:
                 st.markdown("**Seleccionar Patentes:**")
                 patentes_seleccionadas = []
                 
-                # Botones rápidos para marcar/desmarcar patentes
                 col_b1, col_b2 = st.columns(2)
                 with col_b1:
                     todas = st.button("Todas")
                 with col_b2:
                     ninguna = st.button("Ninguna")
                 
-                # Estado para selección de patentes
                 if "patentes_filtro" not in st.session_state:
                     st.session_state.patentes_filtro = patentes_disponibles
 
@@ -200,7 +198,7 @@ if archivo_gps is not None:
             if patentes_seleccionadas:
                 df_filtrado = df_filtrado[df_filtrado["Patente"].isin(patentes_seleccionadas)]
             else:
-                df_filtrado = df_filtrado.iloc[0:0] # Vacío si no selecciona ninguna
+                df_filtrado = df_filtrado.iloc[0:0]
             
             if isinstance(rango_fechas, tuple) and len(rango_fechas) == 2:
                 f_inicio, f_fin = rango_fechas
@@ -305,17 +303,20 @@ if archivo_gps is not None:
                         renombres[col] = "Patente"
                     elif c_low == "fecha":
                         renombres[col] = "Fecha"
+                    elif c_low in ["nombre chofer", "chofer", "conductor", "nombre conductor"]:
+                        renombres[col] = "Nombre Chofer"
                 df_asist = df_asist.rename(columns=renombres)
+
+                if "Nombre Chofer" not in df_asist.columns:
+                    df_asist["Nombre Chofer"] = "No especificado"
 
                 df_asist = df_asist.dropna(subset=["Fecha", "Patente"]).copy()
                 df_asist["Fecha"] = pd.to_datetime(df_asist["Fecha"]).dt.strftime("%Y-%m-%d")
                 df_asist["Patente"] = df_asist["Patente"].astype(str).str.strip().str.upper()
 
-                # Obtener segundos activos de GPS (Ruta + Espera)
                 df_gps_cruce = df_pivot[["Fecha", "Patente", "Tiempo en ruta", "Tiempo en espera"]].copy()
                 df_gps_cruce["GPS_Activo_Secs"] = df_gps_cruce["Tiempo en ruta"] + df_gps_cruce["Tiempo en espera"]
 
-                # Calcular segundos chofer
                 df_asist["Chofer_Inicio_Secs"] = df_asist["Hora inicio"].apply(duration_to_seconds)
                 df_asist["Chofer_Termino_Secs"] = df_asist["Hora termino"].apply(duration_to_seconds)
                 
@@ -334,6 +335,7 @@ if archivo_gps is not None:
                 df_cruce_display = pd.DataFrame({
                     "Fecha": df_cruce["Fecha"],
                     "Patente": df_cruce["Patente"],
+                    "Nombre Chofer": df_cruce["Nombre Chofer"].fillna("Sin registro"),
                     "GPS Activo (Ruta+Espera)": df_cruce["GPS_Activo_Secs"].apply(format_seconds_to_hms),
                     "Hora Inicio Chofer": df_cruce["Hora inicio"],
                     "Hora Término Chofer": df_cruce["Hora termino"],
